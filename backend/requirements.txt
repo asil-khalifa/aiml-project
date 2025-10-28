@@ -6,3 +6,4 @@ joblib
 python-multipart
 shap
 matplotlib
+streamlit
