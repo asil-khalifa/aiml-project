@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { PredictRequest, PredictResponse } from "./types.d.ts";
-import './index.css'
-import './App.css';
+import "./index.css";
+import "./App.css";
 
 const backendPort = 2006;
 
@@ -88,7 +88,10 @@ export default function App() {
     setResult(null);
 
     // send model_name in body (backend gives body precedence)
-    const payload = { ...input, ...(selectedModel ? { model_name: selectedModel } : {}) };
+    const payload = {
+      ...input,
+      ...(selectedModel ? { model_name: selectedModel } : {}),
+    };
 
     try {
       const res = await fetch(`http://localhost:${backendPort}/predict`, {
@@ -148,7 +151,9 @@ export default function App() {
               <input
                 className="mt-1 p-2 border rounded w-full"
                 value={(input as any)[k]}
-                onChange={(e) => handleChange(k as keyof PredictRequest, e.target.value)}
+                onChange={(e) =>
+                  handleChange(k as keyof PredictRequest, e.target.value)
+                }
               />
             </div>
           ))}
@@ -183,12 +188,59 @@ export default function App() {
               Prediction: <strong>{result.prediction}</strong>
             </div>
             <div>
-              Probability: <strong>{(result.probability * 100).toFixed(2)}%</strong>
+              Probability:{" "}
+              <strong>{(result.probability * 100).toFixed(2)}%</strong>
             </div>
-            <div className="text-sm text-gray-500">Model: {result.model_version}</div>
-            {result.note && <div className="text-sm text-gray-500 mt-1">Note: {result.note}</div>}
+            <div className="text-sm text-gray-500">
+              Model: {result.model_version}
+            </div>
+            {result.note && (
+              <div className="text-sm text-gray-500 mt-1">
+                Note: {result.note}
+              </div>
+            )}
+            
+            {/* Model Performance Metrics */}
+            {result.metrics && (
+              <div className="mt-4 border-t pt-3">
+                <div className="text-sm font-medium mb-2">Model Performance Metrics</div>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <span className="text-gray-600">Precision:</span>{" "}
+                    <span className="font-medium">{(result.metrics.precision * 100).toFixed(1)}%</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Recall:</span>{" "}
+                    <span className="font-medium">{(result.metrics.recall * 100).toFixed(1)}%</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">F1 Score:</span>{" "}
+                    <span className="font-medium">{(result.metrics.f1_score * 100).toFixed(1)}%</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Support:</span>{" "}
+                    <span className="font-medium">{result.metrics.support} samples</span>
+                  </div>
+                </div>
+                <div className="text-xs text-gray-500 mt-2">
+                  Metrics computed on test set for the positive class (Heart Disease)
+                </div>
+              </div>
+            )}
           </div>
         )}
+
+        {result?.shap_plot && (
+  <div className="mt-4">
+    <div className="text-lg font-medium mb-2">SHAP Visualization</div>
+    <img
+      src={`data:image/png;base64,${result.shap_plot}`}
+      alt="SHAP Visualization"
+      className="w-full rounded shadow"
+    />
+  </div>
+)}
+
       </div>
     </div>
   );

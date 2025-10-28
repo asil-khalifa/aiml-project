@@ -1,12 +1,18 @@
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import joblib
 import pandas as pd
+import numpy as np
+from sklearn.metrics import classification_report
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
+import shap
+import matplotlib.pyplot as plt
+import io
+import base64
 
-# ---------- CONFIG: map logical model names -> joblib filenames ----------
+# ---------- CONFIGURATION ----------
 MODEL_FILES: Dict[str, str] = {
     "grid_search": "grid_search.joblib",
     "logistic_reg": "logistic_reg.joblib",
@@ -14,30 +20,47 @@ MODEL_FILES: Dict[str, str] = {
     "random_forest": "random_forest.joblib",
 }
 
-DEFAULT_MODEL_KEY = "random_forest"  # used when client doesn't specify
+DEFAULT_MODEL_KEY = "random_forest"
 
-# ---------- load models at startup ----------
+# ---------- LOAD MODELS AND TEST DATA ----------
 _loaded_models: Dict[str, Any] = {}
+_X_test = None
+_y_test = None
+
+# Load test data for metrics computation
+try:
+    data_path = Path(__file__).parent.parent / "model" / "data.csv"
+    if data_path.exists():
+        df = pd.read_csv(str(data_path))
+        # Use last 20% as test set for metrics
+        test_size = int(len(df) * 0.2)
+        _X_test = df.iloc[-test_size:].drop('target', axis=1)
+        _y_test = df.iloc[-test_size:]['target']
+        print(f"✅ Loaded test data: {len(_X_test)} samples")
+    else:
+        print("⚠️ Test data not found at", data_path)
+except Exception as e:
+    print(f"❌ Failed to load test data: {e}")
 _backend_path = Path(__file__).parent
 
 for key, fname in MODEL_FILES.items():
     fpath = _backend_path / fname
     try:
         if fpath.exists():
-            print(f"Loading model '{key}' from {fpath}")
+            print(f"✅ Loading model '{key}' from {fpath}")
             _loaded_models[key] = joblib.load(str(fpath))
         else:
-            print(f"Model file for '{key}' not found at {fpath}; skipping.")
+            print(f"⚠️ Model file for '{key}' not found at {fpath}, skipping.")
     except Exception as e:
-        print(f"Failed to load model '{key}' from {fpath}: {e}")
+        print(f"❌ Failed to load model '{key}': {e}")
 
 if DEFAULT_MODEL_KEY not in _loaded_models:
-    print(f"WARNING: default model '{DEFAULT_MODEL_KEY}' not loaded. Loaded models: {_loaded_models.keys()}")
+    print(f"⚠️ WARNING: Default model '{DEFAULT_MODEL_KEY}' not loaded. Loaded models: {_loaded_models.keys()}")
 
-# ---------- FastAPI app ----------
-app = FastAPI(title="Heart Predictor API (multiple models)")
+# ---------- FASTAPI APP ----------
+app = FastAPI(title="Heart Disease Predictor API (with SHAP Explainability)")
 
-# allow frontend dev origin; change for production
+# Allow CORS for local frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
@@ -46,8 +69,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# ---------- request/response schemas ----------
+# ---------- REQUEST / RESPONSE MODELS ----------
 class PredictRequest(BaseModel):
     age: float = Field(..., ge=0, le=120)
     sex: int = Field(..., ge=0, le=1)
@@ -62,74 +84,152 @@ class PredictRequest(BaseModel):
     slope: int
     ca: int
     thal: int
+    model_name: Optional[str] = None  # Optional model selection in body
 
-    # optional: allow specifying desired model in body (body takes precedence over query param)
-    model_name: Optional[str] = None
 
+class MetricsResponse(BaseModel):
+    precision: float
+    recall: float
+    f1_score: float
+    support: int
 
 class PredictResponse(BaseModel):
     prediction: int
     probability: float
     model_version: Optional[str] = None
     note: Optional[str] = None
+    metrics: Optional[MetricsResponse] = None
+    shap_plot: Optional[str] = None  # Base64 SHAP visualization image
 
 
-# ---------- helper ----------
+# ---------- HELPER ----------
 def get_model_by_key(key: Optional[str]):
-    """Return model object for given logical key, or raise HTTPException if not available."""
+    """Fetch model by name or raise 400 if unavailable."""
     if key is None:
         key = DEFAULT_MODEL_KEY
     if key not in _loaded_models:
-        raise HTTPException(status_code=400, detail=f"Requested model '{key}' not available. Use GET /models to see available models.")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model '{key}' not found. Use /models to see available options.",
+        )
     return key, _loaded_models[key]
 
 
-# ---------- endpoints ----------
+# ---------- ENDPOINTS ----------
 @app.get("/models")
 def list_models():
-    """List available models and which one is the default."""
+    """Return available models and default model."""
     return {"available_models": list(_loaded_models.keys()), "default_model": DEFAULT_MODEL_KEY}
 
 
 @app.post("/predict", response_model=PredictResponse)
-def predict(payload: PredictRequest, model: Optional[str] = Query(None, description="Optional model key (query param). Body.field 'model_name' overrides this.")):
-    """
-    Predict endpoint.
-    Model selection order:
-      1) payload.model_name (if provided)
-      2) query param ?model=...
-      3) default model
-    """
-    # determine model key (body takes precedence)
-    selected_key = payload.model_name if payload.model_name else (model if model else DEFAULT_MODEL_KEY)
+def predict(
+    payload: PredictRequest,
+    model: Optional[str] = Query(None, description="Optional model key (?model=). Body field 'model_name' overrides this."),
+):
+    """Predict heart disease and return SHAP visualization."""
+    # Determine model selection (body > query > default)
+    selected_key = payload.model_name or model or DEFAULT_MODEL_KEY
 
+    model_key, model_obj = get_model_by_key(selected_key)
+
+    # Prepare input DataFrame
+    input_data = pd.DataFrame([payload.dict(exclude={"model_name"})])
+
+    # --- Prediction ---
     try:
-        model_key, model_obj = get_model_by_key(selected_key)
-    except HTTPException as e:
-        raise e
-
-    # build dataframe for inference (1-row)
-    data = pd.DataFrame([payload.dict(exclude={"model_name"})])
-
-    try:
-        # prefer predict_proba when available
         if hasattr(model_obj, "predict_proba"):
-            proba = float(model_obj.predict_proba(data)[:, 1][0])
+            proba = float(model_obj.predict_proba(input_data)[:, 1][0])
             pred = int(proba >= 0.5)
             note = None
         else:
-            # fallback: use predict and return deterministic 1.0/0.0 probability
-            pred = int(model_obj.predict(data)[0])
+            pred = int(model_obj.predict(input_data)[0])
             proba = 1.0 if pred == 1 else 0.0
-            note = "model does not support predict_proba; probability is deterministic from predict()"
+            note = "Model does not support predict_proba; probability inferred."
     except Exception as e:
-        # catch inference errors and return 500
-        print(f"Inference error using model '{model_key}': {e}")
+        print(f"⚠️ Inference error for '{model_key}': {e}")
         raise HTTPException(status_code=500, detail=f"Inference error: {e}")
 
-    return PredictResponse(prediction=pred, probability=proba, model_version=model_key, note=note)
+    # --- SHAP Visualization ---
+    shap_image_b64 = None
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        model_type = type(model_obj).__name__
+        if any(x in model_type for x in ["Forest", "XGB", "GBM", "Tree"]):
+            explainer = shap.TreeExplainer(model_obj)
+            shap_values = explainer.shap_values(input_data)
+
+            # handle classifiers (list of class-specific shap values)
+            if isinstance(shap_values, list):
+                shap_values = shap_values[1]  # select positive class
+
+            shap_exp = shap.Explanation(
+                values=shap_values[0],
+                base_values=getattr(explainer.expected_value, "__getitem__", lambda _: explainer.expected_value)(1),
+                data=input_data.iloc[0],
+                feature_names=input_data.columns
+            )
+            shap.plots.waterfall(shap_exp, show=False)
+        else:
+            explainer = shap.Explainer(model_obj, input_data)
+            shap_values = explainer(input_data)
+            shap.plots.waterfall(shap_values[0], show=False)
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", bbox_inches="tight")
+        plt.close()
+        buf.seek(0)
+        shap_image_b64 = base64.b64encode(buf.read()).decode("utf-8")
+    except Exception as e:
+        print(f"⚠️ SHAP plot generation failed for '{model_key}': {e}")
+
+
+    # --- Compute Metrics on Test Set ---
+    metrics = None
+    if _X_test is not None and _y_test is not None:
+        try:
+            # Get predictions on test set
+            y_pred = model_obj.predict(_X_test)
+            # Compute metrics for positive class (1)
+            report = classification_report(
+                _y_test, 
+                y_pred, 
+                output_dict=True,
+                zero_division=0
+            )
+            metrics = MetricsResponse(
+                precision=float(report['1']['precision']),
+                recall=float(report['1']['recall']),
+                f1_score=float(report['1']['f1-score']),
+                support=int(report['1']['support'])
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to compute metrics for '{model_key}': {e}")
+
+    # --- Response ---
+    return PredictResponse(
+        prediction=pred,
+        probability=proba,
+        model_version=model_key,
+        note=note,
+        shap_plot=shap_image_b64,
+        metrics=metrics
+    )
 
 
 @app.get("/")
 def root():
-    return {"status": "ok", "loaded_models": list(_loaded_models.keys())}
+    return {
+        "status": "ok",
+        "loaded_models": list(_loaded_models.keys()),
+        "default_model": DEFAULT_MODEL_KEY,
+    }
+
+
+# ---------- ENTRY POINT ----------
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app:app", host="0.0.0.0", port=2006, reload=True)
