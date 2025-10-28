@@ -99,7 +99,8 @@ class PredictResponse(BaseModel):
     model_version: Optional[str] = None
     note: Optional[str] = None
     metrics: Optional[MetricsResponse] = None
-    shap_image: Optional[str] = None  # instead of shap_plot
+    shap_image: Optional[str] = None 
+    shap_summary: Optional[str] = None  
 
 
 # ---------- HELPER ----------
@@ -159,7 +160,7 @@ def predict(
 
         model_type = type(model_obj).__name__
         if any(x in model_type for x in ["Forest", "XGB", "GBM", "Tree"]):
-            explainer = shap.TreeExplainer(model_obj)
+            explainer = shap.TreeExplainer(model_obj, feature_perturbation="interventional")
             shap_values = explainer.shap_values(input_data)
 
             # handle classifiers (list of class-specific shap values)
@@ -183,6 +184,15 @@ def predict(
         plt.close()
         buf.seek(0)
         shap_image_b64 = base64.b64encode(buf.read()).decode("utf-8")
+            # ✅ Generate SHAP summary plot (global view)
+        plt.figure()
+        shap.summary_plot(shap_values, input_data, show=False)
+        buf2 = io.BytesIO()
+        plt.savefig(buf2, format="png", bbox_inches="tight")
+        buf2.seek(0)
+        shap_summary_b64 = base64.b64encode(buf2.read()).decode("utf-8")
+        plt.close()
+
     except Exception as e:
         print(f"⚠️ SHAP plot generation failed for '{model_key}': {e}")
 
@@ -216,7 +226,8 @@ def predict(
         model_version=model_key,
         note=note,
         shap_image=shap_image_b64,
-        metrics=metrics
+        metrics=metrics,
+        shap_summary=shap_summary_b64
     )
 
 
