@@ -5,6 +5,7 @@ import joblib
 import pandas as pd
 import numpy as np
 from sklearn.metrics import classification_report
+from sklearn.model_selection import train_test_split
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 import shap
@@ -32,11 +33,31 @@ try:
     data_path = Path(__file__).parent.parent / "model" / "data.csv"
     if data_path.exists():
         df = pd.read_csv(str(data_path))
-        # Use last 20% as test set for metrics
-        test_size = int(len(df) * 0.2)
-        _X_test = df.iloc[-test_size:].drop('target', axis=1)
-        _y_test = df.iloc[-test_size:]['target']
-        print(f"✅ Loaded test data: {len(_X_test)} samples")
+        # Prefer a stratified random split so the test set contains both classes when possible
+        if 'target' not in df.columns:
+            print("⚠️ 'target' column not found in test data; skipping metrics setup")
+        elif df['target'].nunique() < 1:
+            print("⚠️ No labels found in 'target' column; skipping metrics setup")
+        else:
+            try:
+                if df['target'].nunique() > 1:
+                    train_df, test_df = train_test_split(
+                        df, test_size=0.2, random_state=42, stratify=df['target']
+                    )
+                else:
+                    # Only a single class present; fallback to simple split without stratify
+                    train_df, test_df = train_test_split(
+                        df, test_size=0.2, random_state=42
+                    )
+                _X_test = test_df.drop('target', axis=1)
+                _y_test = test_df['target']
+                print(f"✅ Loaded test data: {len(_X_test)} samples; label distribution: {_y_test.value_counts().to_dict()}")
+            except Exception as e:
+                # Fallback: use a simple tail split but warn the user
+                test_size = int(len(df) * 0.2)
+                _X_test = df.iloc[-test_size:].drop('target', axis=1)
+                _y_test = df.iloc[-test_size:]['target']
+                print(f"⚠️ Stratified split failed, falling back to tail-slice. Loaded test data: {len(_X_test)} samples; error: {e}")
     else:
         print("⚠️ Test data not found at", data_path)
 except Exception as e:
@@ -63,7 +84,7 @@ app = FastAPI(title="Heart Disease Predictor API (with SHAP Explainability)")
 # Allow CORS for local frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -153,6 +174,8 @@ def predict(
 
     # --- SHAP Visualization ---
     shap_image_b64 = None
+    # ensure summary variable is always defined to avoid UnboundLocalError on failure
+    shap_summary_b64 = None
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -196,7 +219,30 @@ def predict(
     except Exception as e:
         print(f"⚠️ SHAP plot generation failed for '{model_key}': {e}")
 
+    # debug prints before computing metrics
+    print("DEBUG: _X_test shape:", getattr(_X_test, "shape", None))
+    print("DEBUG: _y_test value_counts:\n", _y_test.value_counts() if _y_test is not None else None)
 
+    # check model type and feature info
+    print("DEBUG: model type:", type(model_obj))
+    if hasattr(model_obj, "feature_names_in_"):
+        print("DEBUG: model.feature_names_in_:", model_obj.feature_names_in_)
+    else:
+        print("DEBUG: _X_test.columns:", list(_X_test.columns))
+
+    # get predictions and show composition
+    y_pred = model_obj.predict(_X_test)
+    print("DEBUG: unique predictions:", np.unique(y_pred), "counts:", np.bincount(y_pred.astype(int)))
+
+    # if available, show sample probabilities
+    if hasattr(model_obj, "predict_proba"):
+        try:
+            proba_sample = model_obj.predict_proba(_X_test)[:5, 1]
+            print("DEBUG: sample predicted probabilities (first 5):", proba_sample)
+        except Exception as e:
+            print("DEBUG: predict_proba failed:", e)
+    
+    
     # --- Compute Metrics on Test Set ---
     metrics = None
     if _X_test is not None and _y_test is not None:
@@ -205,17 +251,33 @@ def predict(
             y_pred = model_obj.predict(_X_test)
             # Compute metrics for positive class (1)
             report = classification_report(
-                _y_test, 
-                y_pred, 
+                _y_test,
+                y_pred,
                 output_dict=True,
-                zero_division=0
+                zero_division=0,
             )
-            metrics = MetricsResponse(
-                precision=float(report['1']['precision']),
-                recall=float(report['1']['recall']),
-                f1_score=float(report['1']['f1-score']),
-                support=int(report['1']['support'])
-            )
+            pos_report = report.get('1')
+            # If there are no positive samples in the test set, pos_report may be missing or have support == 0
+            if pos_report and pos_report.get('support', 0) > 0:
+                metrics = MetricsResponse(
+                    precision=float(pos_report['precision']),
+                    recall=float(pos_report['recall']),
+                    f1_score=float(pos_report['f1-score']),
+                    support=int(pos_report['support']),
+                )
+            else:
+                # No positive class examples in test set — fall back to macro average if available
+                print(f"⚠️ No positive samples in test set for '{model_key}' (support=0). report keys: {list(report.keys())}")
+                if 'macro avg' in report:
+                    ma = report['macro avg']
+                    metrics = MetricsResponse(
+                        precision=float(ma['precision']),
+                        recall=float(ma['recall']),
+                        f1_score=float(ma['f1-score']),
+                        support=int(len(_y_test)),
+                    )
+                else:
+                    metrics = None
         except Exception as e:
             print(f"⚠️ Failed to compute metrics for '{model_key}': {e}")
 
