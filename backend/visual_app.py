@@ -5,11 +5,11 @@ import matplotlib.pyplot as plt
 import base64
 from io import BytesIO
 
-st.set_page_config(page_title="💓 Heart Disease Visualizer", layout="wide")
+st.set_page_config(page_title="Heart Disease Classifier", layout="wide")
 
 API_URL = "http://localhost:2006/predict"   # FastAPI backend URL
 
-st.markdown("<h1 style='text-align:center;color:red;'>💓 Heart Disease Predictor Dashboard</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align:center;color:red;'>Heart Disease Predictor Dashboard</h1>", unsafe_allow_html=True)
 st.write("### Enter Patient Details Below")
 
 # --- Sidebar input form ---
@@ -28,7 +28,7 @@ with st.sidebar.form("input_form"):
     ca = st.selectbox("Major Vessels (0-3)", [0, 1, 2, 3])
     thal = st.selectbox("Thal (0=Normal, 1=Fixed defect, 2=Reversible defect)", [0, 1, 2])
     model_name = st.selectbox("Select Model", ["random_forest", "logistic_reg", "knn", "grid_search"])
-    submitted = st.form_submit_button("🚀 Predict")
+    submitted = st.form_submit_button("Predict")
 
 # --- When user submits ---
 if submitted:
@@ -55,9 +55,9 @@ if submitted:
         result = response.json()
 
         if response.status_code != 200:
-            st.error(f"❌ Error: {result.get('detail', 'Unknown error')}")
+            st.error(f"Error: {result.get('detail', 'Unknown error')}")
         else:
-            st.success("✅ Prediction complete!")
+            st.success("Prediction complete!")
 
             # --- Prediction result ---
             col1, col2 = st.columns(2)
@@ -68,7 +68,7 @@ if submitted:
 
             # --- Metrics ---
             if result.get("metrics"):
-                st.subheader("📊 Model Performance on Test Data")
+                st.subheader("Model Performance on Test Data")
                 metrics = result["metrics"]
                 df_metrics = pd.DataFrame([metrics])
                 st.table(df_metrics)
@@ -82,7 +82,7 @@ if submitted:
 
             # --- SHAP Visualization ---
             if result.get("shap_image"):
-                st.subheader("🧠 SHAP Explainability (Waterfall Plot)")
+                st.subheader("SHAP Explainability (Waterfall Plot)")
                 image_data = base64.b64decode(result["shap_image"])
                 st.image(BytesIO(image_data), caption="SHAP Waterfall Plot", use_column_width=True)
             else:
@@ -93,4 +93,3 @@ if submitted:
 
 # --- Footer visuals ---
 st.markdown("---")
-st.markdown("Developed with ❤️ using FastAPI + Streamlit + SHAP")
