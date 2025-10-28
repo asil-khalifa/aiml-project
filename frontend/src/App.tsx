@@ -199,31 +199,42 @@ export default function App() {
                 Note: {result.note}
               </div>
             )}
-            
+
             {/* Model Performance Metrics */}
             {result.metrics && (
               <div className="mt-4 border-t pt-3">
-                <div className="text-sm font-medium mb-2">Model Performance Metrics</div>
+                <div className="text-sm font-medium mb-2">
+                  Model Performance Metrics
+                </div>
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <div>
                     <span className="text-gray-600">Precision:</span>{" "}
-                    <span className="font-medium">{(result.metrics.precision * 100).toFixed(1)}%</span>
+                    <span className="font-medium">
+                      {(result.metrics.precision * 100).toFixed(1)}%
+                    </span>
                   </div>
                   <div>
                     <span className="text-gray-600">Recall:</span>{" "}
-                    <span className="font-medium">{(result.metrics.recall * 100).toFixed(1)}%</span>
+                    <span className="font-medium">
+                      {(result.metrics.recall * 100).toFixed(1)}%
+                    </span>
                   </div>
                   <div>
                     <span className="text-gray-600">F1 Score:</span>{" "}
-                    <span className="font-medium">{(result.metrics.f1_score * 100).toFixed(1)}%</span>
+                    <span className="font-medium">
+                      {(result.metrics.f1_score * 100).toFixed(1)}%
+                    </span>
                   </div>
                   <div>
                     <span className="text-gray-600">Support:</span>{" "}
-                    <span className="font-medium">{result.metrics.support} samples</span>
+                    <span className="font-medium">
+                      {result.metrics.support} samples
+                    </span>
                   </div>
                 </div>
                 <div className="text-xs text-gray-500 mt-2">
-                  Metrics computed on test set for the positive class (Heart Disease)
+                  Metrics computed on test set for the positive class (Heart
+                  Disease)
                 </div>
               </div>
             )}
@@ -231,16 +242,15 @@ export default function App() {
         )}
 
         {result?.shap_plot && (
-  <div className="mt-4">
-    <div className="text-lg font-medium mb-2">SHAP Visualization</div>
-    <img
-      src={`data:image/png;base64,${result.shap_plot}`}
-      alt="SHAP Visualization"
-      className="w-full rounded shadow"
-    />
-  </div>
-)}
-
+          <div className="mt-4">
+            <div className="text-lg font-medium mb-2">SHAP Visualization</div>
+            <img
+              src={`data:image/png;base64,${result.shap_plot}`}
+              alt="SHAP Visualization"
+              className="w-full rounded shadow"
+            />
+          </div>
+        )}
       </div>
     </div>
   );

@@ -99,7 +99,7 @@ class PredictResponse(BaseModel):
     model_version: Optional[str] = None
     note: Optional[str] = None
     metrics: Optional[MetricsResponse] = None
-    shap_plot: Optional[str] = None  # Base64 SHAP visualization image
+    shap_image: Optional[str] = None  # instead of shap_plot
 
 
 # ---------- HELPER ----------
@@ -215,7 +215,7 @@ def predict(
         probability=proba,
         model_version=model_key,
         note=note,
-        shap_plot=shap_image_b64,
+        shap_image=shap_image_b64,
         metrics=metrics
     )
 

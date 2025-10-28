@@ -25,6 +25,6 @@ export interface PredictResponse {
   probability: number;
   model_version: string;
   note?: string;
-  shap_image?: string;
+  shap_plot?: string;
   metrics?: MetricsResponse;
 }
